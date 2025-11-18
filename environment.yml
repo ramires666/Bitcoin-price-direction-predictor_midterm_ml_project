@@ -1,0 +1,25 @@
+name: xgb_fints_project
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - xgboost
+  - lightgbm
+  - hmmlearn
+  - scipy
+  - statsmodels
+  - requests
+  - fastapi
+  - uvicorn
+  - sqlalchemy
+  - joblib
+  - pip
+  - pip:
+    - pandas-ta
+    - python-multipart

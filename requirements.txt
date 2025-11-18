@@ -1,0 +1,8 @@
+pandas
+numpy
+pandas-ta
+matplotlib
+xgboost
+scikit-learn
+lightgbm
+itertools

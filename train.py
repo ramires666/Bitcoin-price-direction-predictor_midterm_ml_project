@@ -150,6 +150,17 @@ def add_hmm_features(df, model_hmm, scaler_hmm):
     
     # Handle NaNs for prediction (fill with 0 or drop) - here we drop for simplicity in training
     # In production, you might want to forward fill or use 0
+    # Create a boolean mask to filter out invalid rows (containing Infinity or NaN values)
+    # 1. ~hmm_data.isin([np.inf, -np.inf]).any(axis=1):
+    #    - hmm_data.isin(...) checks for positive or negative infinity in the data.
+    #    - .any(axis=1) returns True if any column in a row contains infinity.
+    #    - The tilde (~) negates this, so we get True for rows WITHOUT any infinity.
+    # 2. ~hmm_data.isna().any(axis=1):
+    #    - hmm_data.isna() checks for NaN (Not a Number) values.
+    #    - .any(axis=1) returns True if any column in a row contains NaN.
+    #    - The tilde (~) negates this, so we get True for rows WITHOUT any NaN.
+    # 3. The '&' operator combines these two conditions, ensuring we keep only rows
+    #    that are free from both infinite and missing values.
     mask = ~hmm_data.isin([np.inf, -np.inf]).any(axis=1) & ~hmm_data.isna().any(axis=1)
     valid_data = hmm_data[mask]
     
@@ -239,11 +250,17 @@ def main():
         'subsample': [0.6, 0.8, 1.0],
         'colsample_bytree': [0.6, 0.8, 1.0]
     }
-    
+
+
+    """Handling Imbalance: The primary purpose of using the 'f1_weighted' metric is to provide a balanced evaluation when dealing with imbalanced datasets, where some classes have significantly more samples than others. Standard accuracy can be misleading in such cases because a model might perform well on the majority class but poorly on rare, important classes.
+Calculation:
+The F1 score (harmonic mean of precision and recall) is computed for each individual class.
+Each class's F1 score is then multiplied by its "support" (the actual number of samples in that class).
+These weighted scores are summed and divided by the total number of instances across all classes to get a single, overall score."""
     random_search = RandomizedSearchCV(
         estimator=xgb,
         param_distributions=param_dist,
-        n_iter=20,
+        n_iter=200,
         scoring='f1_weighted',
         cv=TimeSeriesSplit(n_splits=3),
         verbose=1,

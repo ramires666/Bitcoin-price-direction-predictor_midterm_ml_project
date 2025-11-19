@@ -17,6 +17,8 @@ import warnings
 import json
 
 warnings.filterwarnings('ignore')
+# Suppress pkg_resources deprecation warning from libraries like joblib/sklearn
+warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 
 # --- Configuration ---
 DATA_PATH_FUNDINGS = "data/processed/fundings.parquet"

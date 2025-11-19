@@ -13,3 +13,4 @@ pyarrow
 numba
 requests
 sqlalchemy
+setuptools&lt;81

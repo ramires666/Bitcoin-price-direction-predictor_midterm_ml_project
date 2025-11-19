@@ -19,7 +19,7 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Expose port
-EXPOSE 11111
+EXPOSE 8080
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "11111"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

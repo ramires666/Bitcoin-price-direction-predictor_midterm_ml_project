@@ -253,10 +253,19 @@ def main():
     random_search.fit(X_scaled, y)
     best_model = random_search.best_estimator_
     print(f"Best Parameters: {random_search.best_params_}")
+    print(f"Best Score: {random_search.best_score_}")
     
     # 7. Save Models
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
+        
+    # Save metrics
+    metrics = {
+        "best_score": random_search.best_score_,
+        "best_params": random_search.best_params_
+    }
+    with open(os.path.join(MODEL_DIR, "metrics.json"), "w") as f:
+        json.dump(metrics, f)
         
     joblib.dump(best_model, os.path.join(MODEL_DIR, MODEL_FILENAME))
     joblib.dump(scaler, os.path.join(MODEL_DIR, SCALER_FILENAME))

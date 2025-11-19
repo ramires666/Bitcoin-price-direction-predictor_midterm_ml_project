@@ -7,5 +7,5 @@ services:
       - "11111:11111"
     volumes:
       - ./models:/app/models
-      - ./crypto_data.db:/app/crypto_data.db
+      - ./data/crypto_data.db:/app/crypto_data.db
     restart: always

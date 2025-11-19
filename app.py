@@ -1,6 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
@@ -11,13 +11,23 @@ from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
+import zipfile
+import io
+import csv
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from scipy.ndimage import gaussian_filter1d
 from predict import Predictor
+import json
 
 # --- Configuration ---
 DATABASE_URL = "sqlite:///./crypto_data.db"
 SYMBOL = "BTCUSDT"
 INTERVAL = "15m"
 LIMIT = 96  # 24 hours of 15m candles
+BINANCE_VISION_BASE_URL = "https://data.binance.vision/data/futures/um/daily/klines"
+SIGMA = 4
+THRESHOLD = 0.0004
 
 # --- Database Setup ---
 Base = declarative_base()
@@ -51,6 +61,9 @@ def startup_event():
         print("Predictor initialized.")
     except Exception as e:
         print(f"Warning: Predictor failed to initialize (models might be missing): {e}")
+    
+    # Check and backfill data
+    backfill_data()
 
 def get_db():
     db = SessionLocal()
@@ -59,17 +72,19 @@ def get_db():
     finally:
         db.close()
 
-def fetch_binance_data():
-    """Fetches last 24h data from Binance."""
-    end_time = datetime.now(timezone.utc)
-    start_time = end_time - timedelta(hours=24)
+def fetch_binance_data(start_time=None, end_time=None, limit=LIMIT):
+    """Fetches data from Binance API."""
+    if end_time is None:
+        end_time = datetime.now(timezone.utc)
+    if start_time is None:
+        start_time = end_time - timedelta(hours=24)
     
     params = {
         "symbol": SYMBOL,
         "interval": INTERVAL,
         "startTime": int(start_time.timestamp() * 1000),
         "endTime": int(end_time.timestamp() * 1000),
-        "limit": LIMIT
+        "limit": limit
     }
     
     url = "https://api.binance.com/api/v3/klines"
@@ -81,18 +96,132 @@ def fetch_binance_data():
         print(f"Error fetching data: {e}")
         return []
 
-def update_database():
-    """Fetches data and updates SQLite."""
-    klines_data = fetch_binance_data()
-    if not klines_data:
-        return False
+def download_and_import_binance_vision_data(date_str):
+    """Downloads and imports data from Binance Vision for a specific date."""
+    # URL format: https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/15m/BTCUSDT-15m-2025-11-17.zip
+    filename = f"{SYMBOL}-{INTERVAL}-{date_str}.zip"
+    url = f"{BINANCE_VISION_BASE_URL}/{SYMBOL}/{INTERVAL}/{filename}"
+    
+    print(f"Attempting to download {url}...")
+    try:
+        r = requests.get(url)
+        if r.status_code == 404:
+            print(f"Data not found for {date_str} on Binance Vision.")
+            return False
+        r.raise_for_status()
         
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            # There should be one CSV file inside
+            csv_filename = z.namelist()[0]
+            with z.open(csv_filename) as f:
+                # Read CSV
+                # Format: open_time, open, high, low, close, volume, close_time, quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore
+                # Note: Binance Vision CSVs usually don't have headers, but the user example shows headers.
+                # We'll check the first line.
+                content = f.read().decode('utf-8')
+                reader = csv.reader(io.StringIO(content))
+                header = next(reader)
+                
+                # Check if first row is header
+                if header[0] == 'open_time':
+                    pass # Header exists, proceed
+                else:
+                    # Reset reader if no header (re-create StringIO is easiest)
+                    reader = csv.reader(io.StringIO(content))
+                
+                db = SessionLocal()
+                count = 0
+                try:
+                    for row in reader:
+                        if not row: continue
+                        open_time_ms = int(row[0])
+                        open_time = datetime.fromtimestamp(open_time_ms / 1000, tz=timezone.utc)
+                        
+                        # Check if exists
+                        existing = db.query(Kline).filter(Kline.open_time == open_time.replace(tzinfo=None)).first()
+                        if not existing:
+                            kline = Kline(
+                                open_time=open_time.replace(tzinfo=None),
+                                open_price=float(row[1]),
+                                high_price=float(row[2]),
+                                low_price=float(row[3]),
+                                close_price=float(row[4]),
+                                volume=float(row[5]),
+                                quote_vol=float(row[7]),
+                                taker_buy_vol=float(row[9]),
+                                taker_buy_quote_vol=float(row[10])
+                            )
+                            db.add(kline)
+                            count += 1
+                    db.commit()
+                    print(f"Imported {count} klines from {date_str}")
+                    return True
+                except Exception as e:
+                    print(f"Error importing CSV data: {e}")
+                    db.rollback()
+                    return False
+                finally:
+                    db.close()
+                    
+    except Exception as e:
+        print(f"Error downloading/processing {url}: {e}")
+        return False
+
+def backfill_data():
+    """Checks for missing data and backfills from Binance Vision or API."""
+    print("Checking data completeness...")
+    db = SessionLocal()
+    try:
+        # Check last 7 days
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=7)
+        
+        current_date = start_date
+        while current_date < end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            
+            # Check if we have data for this day (simple check: at least one record)
+            day_start = datetime.combine(current_date, datetime.min.time())
+            day_end = datetime.combine(current_date, datetime.max.time())
+            
+            count = db.query(Kline).filter(
+                Kline.open_time >= day_start,
+                Kline.open_time <= day_end
+            ).count()
+            
+            if count < 90: # Expecting 96 candles per day
+                print(f"Data missing for {date_str} (found {count}). Attempting backfill...")
+                success = download_and_import_binance_vision_data(date_str)
+                if not success:
+                    print(f"Binance Vision failed for {date_str}. Trying API fallback...")
+                    # Fallback to API for this day
+                    # Note: API limit is 1000 candles, 15m * 96 = 1 day is fine.
+                    start_ts = int(day_start.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    end_ts = int(day_end.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    
+                    klines_data = fetch_binance_data(
+                        start_time=day_start.replace(tzinfo=timezone.utc),
+                        end_time=day_end.replace(tzinfo=timezone.utc),
+                        limit=1000
+                    )
+                    if klines_data:
+                        save_klines_to_db(klines_data)
+            
+            current_date += timedelta(days=1)
+            
+        # Always update latest data from API
+        update_database()
+        
+    finally:
+        db.close()
+
+def save_klines_to_db(klines_data):
+    """Helper to save API klines to DB."""
+    if not klines_data: return
     db = SessionLocal()
     try:
         for k in klines_data:
             open_time = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc)
-            
-            # Check if exists
             existing = db.query(Kline).filter(Kline.open_time == open_time.replace(tzinfo=None)).first()
             if not existing:
                 kline = Kline(
@@ -108,13 +237,18 @@ def update_database():
                 )
                 db.add(kline)
         db.commit()
-        return True
     except Exception as e:
-        print(f"Database update error: {e}")
+        print(f"Error saving klines: {e}")
         db.rollback()
-        return False
     finally:
         db.close()
+
+def update_database():
+    """Fetches latest data and updates SQLite."""
+    # Fetch last 24h to be safe
+    klines_data = fetch_binance_data()
+    save_klines_to_db(klines_data)
+    return True
 
 def get_data_for_prediction():
     """Retrieves data from DB for prediction."""
@@ -155,6 +289,82 @@ def get_data_for_prediction():
 
 # --- Routes ---
 
+def create_target_labels(df, sigma=SIGMA, threshold=THRESHOLD):
+    """Creates target labels using Gaussian smoothing (same as train.py)."""
+    df_target = df.copy()
+    df_target['smoothed_close'] = gaussian_filter1d(df_target['close'], sigma=sigma)
+    df_target['smooth_slope'] = np.diff(np.log(df_target['smoothed_close']), prepend=np.nan)
+    
+    conditions = [
+        df_target['smooth_slope'] > threshold,
+        df_target['smooth_slope'] < -threshold
+    ]
+    choices = [2, 0]
+    df_target['target'] = np.select(conditions, choices, default=1)
+    return df_target
+
+def generate_plot(df, prediction, timestamp, start_date=None, end_date=None):
+    """Generates a plot with prediction highlight."""
+    plt.figure(figsize=(12, 6))
+    
+    # Filter by date range
+    if start_date:
+        df = df[df['time'] >= pd.to_datetime(start_date)]
+    if end_date:
+        df = df[df['time'] <= pd.to_datetime(end_date)]
+        
+    # If no specific range, default to last 3 days
+    if start_date is None and end_date is None:
+        cutoff_date = df['time'].max() - timedelta(days=3)
+        df = df[df['time'] > cutoff_date]
+        
+    plot_df = df.copy()
+    
+    # Calculate ground truth labels for history
+    plot_df = create_target_labels(plot_df)
+    
+    plt.plot(plot_df['time'], plot_df['close'], label='Close Price', color='black', linewidth=1)
+    plt.plot(plot_df['time'], plot_df['smoothed_close'], label='Smoothed Trend', color='blue', linestyle='--', alpha=0.7)
+    
+    # Highlight historical regions
+    # 0: DOWN (Red), 1: SIDEWAYS (Gray), 2: UP (Green)
+    # Increased intensity colors
+    colors = {0: '#ffcccc', 1: '#e0e0e0', 2: '#ccffcc'}
+    
+    # Iterate and highlight
+    # We group consecutive identical targets to minimize span calls
+    plot_df['group'] = (plot_df['target'] != plot_df['target'].shift()).cumsum()
+    
+    for _, group in plot_df.groupby('group'):
+        start_time = group['time'].iloc[0]
+        end_time = group['time'].iloc[-1] + timedelta(minutes=15) # Extend to cover the bar
+        target = group['target'].iloc[0]
+        plt.axvspan(start_time, end_time, color=colors.get(target, 'white'), alpha=0.8) # Increased alpha
+
+    # Highlight prediction (Forecast)
+    forecast_colors = {0: 'red', 1: 'gray', 2: 'green'}
+    color = forecast_colors.get(prediction, 'gray')
+    
+    last_time = plot_df['time'].iloc[-1]
+    next_time = last_time + timedelta(minutes=15)
+    
+    plt.axvspan(last_time, next_time, color=color, alpha=0.8, label='Forecast')
+    
+    plt.title(f"BTCUSDT Price & Forecast: {['DOWN', 'SIDEWAYS', 'UP'][prediction]}")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Save plot
+    plot_path = "static/prediction_plot.png"
+    os.makedirs("static", exist_ok=True)
+    plt.savefig(plot_path)
+    plt.close()
+    return plot_path
+
+# Removed evaluate_model to avoid confusion about training vs inference accuracy.
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     return """
@@ -162,11 +372,14 @@ async def read_root():
         <head>
             <title>BTC Predictor</title>
             <style>
-                body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                body { font-family: sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; }
                 .card { border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-top: 20px; }
                 button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
                 button:hover { background-color: #0056b3; }
                 #result { margin-top: 20px; font-weight: bold; }
+                img { max-width: 100%; height: auto; margin-top: 20px; }
+                .controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+                input[type="date"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
             </style>
         </head>
         <body>
@@ -174,17 +387,41 @@ async def read_root():
             <p>Predicts the direction of the NEXT 15-minute candle.</p>
             
             <div class="card">
-                <button onclick="predict()">Update Data & Predict</button>
+                <div class="controls">
+                    <label>From:</label>
+                    <input type="date" id="start-date">
+                    <label>To:</label>
+                    <input type="date" id="end-date">
+                    <button onclick="predict()">Update Data & Predict</button>
+                </div>
                 <div id="result"></div>
+                <div id="plot-container"></div>
             </div>
 
             <script>
+                // Set default dates (last 3 days)
+                const today = new Date();
+                const threeDaysAgo = new Date();
+                threeDaysAgo.setDate(today.getDate() - 3);
+                
+                document.getElementById('end-date').valueAsDate = today;
+                document.getElementById('start-date').valueAsDate = threeDaysAgo;
+
                 async function predict() {
                     const resultDiv = document.getElementById('result');
+                    const plotDiv = document.getElementById('plot-container');
+                    const startDate = document.getElementById('start-date').value;
+                    const endDate = document.getElementById('end-date').value;
+                    
                     resultDiv.innerHTML = "Fetching data and calculating...";
+                    plotDiv.innerHTML = "";
                     
                     try {
-                        const response = await fetch('/predict', { method: 'POST' });
+                        const response = await fetch('/predict', { 
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ start_date: startDate, end_date: endDate })
+                        });
                         const data = await response.json();
                         
                         if (data.error) {
@@ -199,6 +436,7 @@ async def read_root():
                             resultDiv.innerHTML = `
                                 <h3>Prediction: <span style="color: ${color}">${labels[data.prediction]}</span></h3>
                                 <p>Time: ${data.timestamp}</p>
+                                <p>Model Accuracy: <strong>${data.accuracy}</strong></p>
                                 <p>Probabilities:</p>
                                 <ul>
                                     <li>DOWN: ${(data.probabilities[0]*100).toFixed(1)}%</li>
@@ -206,6 +444,9 @@ async def read_root():
                                     <li>UP: ${(data.probabilities[2]*100).toFixed(1)}%</li>
                                 </ul>
                             `;
+                            
+                            // Load plot
+                            plotDiv.innerHTML = `<img src="/plot?t=${new Date().getTime()}" alt="Prediction Plot">`;
                         }
                     } catch (e) {
                         resultDiv.innerHTML = `<span style="color: red;">Network Error: ${e}</span>`;
@@ -216,15 +457,46 @@ async def read_root():
     </html>
     """
 
+@app.get("/plot")
+async def get_plot():
+    return FileResponse("static/prediction_plot.png")
+
+class PredictionRequest(BaseModel):
+    start_date: str = None
+    end_date: str = None
+
 @app.post("/predict")
-async def make_prediction(background_tasks: BackgroundTasks):
+async def make_prediction(request: PredictionRequest, background_tasks: BackgroundTasks):
     # 1. Update Data
     success = update_database()
     if not success:
         return {"error": "Failed to fetch data from Binance"}
     
     # 2. Get Data
-    df = get_data_for_prediction()
+    # Get more data for plotting (7 days * 96 candles = 672)
+    db = SessionLocal()
+    try:
+        klines = db.query(Kline).order_by(Kline.open_time.desc()).limit(2000).all()
+        if not klines:
+            return {"error": "Not enough data in database"}
+        
+        data = []
+        for k in reversed(klines):
+            data.append({
+                'time': k.open_time,
+                'open': k.open_price,
+                'high': k.high_price,
+                'low': k.low_price,
+                'close': k.close_price,
+                'volume': k.volume,
+                'quote_vol': k.quote_vol,
+                'taker_buy_vol': k.taker_buy_vol,
+                'taker_buy_quote_vol': k.taker_buy_quote_vol
+            })
+        df = pd.DataFrame(data)
+    finally:
+        db.close()
+
     if df is None or len(df) < 50:
         return {"error": "Not enough data in database"}
     
@@ -238,10 +510,14 @@ async def make_prediction(background_tasks: BackgroundTasks):
         if pred_class is None:
              return {"error": "Prediction failed (insufficient data for features)"}
 
+        # Generate Plot
+        generate_plot(df, int(pred_class), timestamp, request.start_date, request.end_date)
+
         return {
             "timestamp": str(timestamp),
             "prediction": int(pred_class),
-            "probabilities": [float(p) for p in pred_proba]
+            "probabilities": [float(p) for p in pred_proba],
+            "accuracy": "N/A (Run training to see)"
         }
     except Exception as e:
         return {"error": str(e)}

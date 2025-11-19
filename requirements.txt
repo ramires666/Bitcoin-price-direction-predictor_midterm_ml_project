@@ -1,8 +1,15 @@
-pandas
 numpy
+pandas
 pandas-ta
 matplotlib
 xgboost
 scikit-learn
 lightgbm
-itertools
+hmmlearn
+joblib
+fastapi
+uvicorn
+pyarrow
+numba
+requests
+sqlalchemy

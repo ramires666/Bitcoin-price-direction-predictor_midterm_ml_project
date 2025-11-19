@@ -1,3 +1,9 @@
+import os
+# Workaround for Windows OpenMP/scikit-learn conflict
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
@@ -8,7 +14,6 @@ from hmmlearn.hmm import GaussianHMM
 from scipy.ndimage import gaussian_filter1d
 import joblib
 import warnings
-import os
 
 warnings.filterwarnings('ignore')
 
@@ -81,12 +86,23 @@ def add_features(df):
     
     # Volume Features
     df["volume_delta"] = df["ask_vol"] - df["bid_vol"]
+    df["cvd"] = df["volume_delta"].cumsum()
     for window in [4, 12, 24]:
         df[f"vol_delta_rolling_{window}"] = df["volume_delta"].rolling(window).sum()
         
     # Volatility Features
-    df.ta.bbands(length=20, std=2, append=True)
-    df['bb_width'] = (df['BBU_20_2.0_2.0'] - df['BBL_20_2.0_2.0']) / df['BBM_20_2.0_2.0']
+    df['range_pct'] = (df['high'] - df['low']) / df['close']
+    bbands = df.ta.bbands(length=20, std=2)
+    df = pd.concat([df, bbands], axis=1)
+    
+    # Handle bb_width column name variation
+    try:
+        df['bb_width'] = (df['BBU_20_2.0'] - df['BBL_20_2.0']) / df['BBM_20_2.0']
+    except KeyError:
+        bbu = [c for c in df.columns if c.startswith('BBU_')][0]
+        bbl = [c for c in df.columns if c.startswith('BBL_')][0]
+        bbm = [c for c in df.columns if c.startswith('BBM_')][0]
+        df['bb_width'] = (df[bbu] - df[bbl]) / df[bbm]
     
     # Trend Features
     df['ema_12'] = ta.ema(df['close'], length=12)
@@ -98,21 +114,37 @@ def add_features(df):
 def train_hmm(df):
     """Trains HMM and returns the model and scaler."""
     print("Training HMM...")
-    hmm_data = df[['log_return', 'bb_width', 'volume_delta']].copy()
+    hmm_data = df[['log_return', 'range_pct', 'volume_delta']].copy()
     hmm_data['log_volume'] = np.log(df['total_vol'] + 1)
     hmm_data = hmm_data.replace([np.inf, -np.inf], np.nan).dropna()
     
     scaler_hmm = RobustScaler()
     X_hmm = scaler_hmm.fit_transform(hmm_data)
     
-    model_hmm = GaussianHMM(n_components=3, covariance_type="full", n_iter=100, random_state=42)
+    # Initialize HMM with random parameters to avoid K-Means initialization crash on Windows
+    # We use init_params="stc" to skip 'm' (means) initialization which uses KMeans by default
+    model_hmm = GaussianHMM(n_components=3, covariance_type="full", n_iter=100, random_state=42, init_params="stc")
+    
+    # Initialize means manually to skip KMeans
+    # We split the data into 3 chunks and take their means as initial guesses
+    means_init = []
+    chunk_size = len(X_hmm) // 3
+    for i in range(3):
+        chunk = X_hmm[i*chunk_size:(i+1)*chunk_size]
+        if len(chunk) > 0:
+            means_init.append(chunk.mean(axis=0))
+        else:
+            means_init.append(np.random.rand(X_hmm.shape[1]))
+            
+    model_hmm.means_ = np.array(means_init)
+    
     model_hmm.fit(X_hmm)
     
     return model_hmm, scaler_hmm
 
 def add_hmm_features(df, model_hmm, scaler_hmm):
     """Adds HMM state probabilities to the dataframe."""
-    hmm_data = df[['log_return', 'bb_width', 'volume_delta']].copy()
+    hmm_data = df[['log_return', 'range_pct', 'volume_delta']].copy()
     hmm_data['log_volume'] = np.log(df['total_vol'] + 1)
     
     # Handle NaNs for prediction (fill with 0 or drop) - here we drop for simplicity in training
@@ -154,12 +186,28 @@ def main():
     
     # 5. Prepare for XGBoost
     feature_cols = [
-        'volume_delta', 'vol_delta_rolling_4', 'vol_delta_rolling_12', 'vol_delta_rolling_24',
+        'volume_delta', 'cvd', 'vol_delta_rolling_4', 'vol_delta_rolling_12', 'vol_delta_rolling_24',
         'RSI_14', 'MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9', 'trend_ema',
-        'bb_width', 'BBP_20_2.0_2.0',
+        'bb_width', 'BBP_20_2.0', 'range_pct',
         'hmm_prob_0', 'hmm_prob_1', 'hmm_prob_2'
     ]
     
+    # Handle BBP column name variation
+    if 'BBP_20_2.0' not in df.columns:
+        # Try to find BBP column
+        bbp_cols = [c for c in df.columns if c.startswith('BBP_')]
+        if bbp_cols:
+            df['BBP_20_2.0'] = df[bbp_cols[0]]
+        else:
+            # Calculate manually if missing: (Close - Lower) / (Upper - Lower)
+            try:
+                bbu = [c for c in df.columns if c.startswith('BBU_')][0]
+                bbl = [c for c in df.columns if c.startswith('BBL_')][0]
+                df['BBP_20_2.0'] = (df['close'] - df[bbl]) / (df[bbu] - df[bbl])
+            except IndexError:
+                print("Warning: Could not calculate BBP. Filling with 0.")
+                df['BBP_20_2.0'] = 0
+
     # Shift features (predict next bar)
     df[feature_cols] = df[feature_cols].shift(1)
     df = df.dropna()

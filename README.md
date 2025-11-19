@@ -24,7 +24,7 @@ This project isn't just another technical indicator. It's a sophisticated machin
     *   Saves the best model and the list of selected features to `models/`.
 *   **`predict.py`**: The inference engine. Loads the trained model and the list of best features to generate predictions for new data.
 *   **`app.py`**: A FastAPI web service that connects to Binance, fetches live data, caches it in a local database, and serves up fresh predictions.
-*   **`midterm_project_bitcoin_price_direction_classificator__III.py`**: The advanced research script detailing the entire journey from data analysis to the final optimized pipeline.
+*   **`midterm_project_bitcoin_price_direction_classificator_final.ipynb`**: The advanced research script detailing the entire journey from data analysis to the final optimized pipeline.
 
 ## ⚡ How to Run
 
@@ -81,11 +81,11 @@ Spin up the prediction service with a single command:
 docker-compose up --build
 ```
 
-The service will start on **port 11111**.
+The service will start on **port 8080**.
 
 ### 4. Get Predictions!
 Open your browser and go to:
-👉 **http://localhost:11111**
+👉 **http://localhost:8080**
 
 You'll see a simple interface. Click **"Update Data & Predict"** to fetch the latest market data from Binance and consult the Oracle.
 

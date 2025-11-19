@@ -2,6 +2,7 @@ numpy
 pandas
 pandas-ta
 matplotlib
+seaborn
 xgboost
 scikit-learn
 lightgbm
@@ -13,4 +14,5 @@ pyarrow
 numba
 requests
 sqlalchemy
-setuptools&lt;81
+statsmodels
+setuptools<81

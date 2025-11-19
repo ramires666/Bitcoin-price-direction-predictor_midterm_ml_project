@@ -1,1 +1,22 @@
-{"best_score": 0.6858703870201959, "best_params": {"subsample": 0.6, "n_estimators": 100, "min_child_weight": 1, "max_depth": 5, "learning_rate": 0.05, "colsample_bytree": 1.0}}
+{
+    "best_cv_score": 0.6664989945481808,
+    "best_params": {
+        "subsample": 0.6,
+        "reg_lambda": 0.01,
+        "reg_alpha": 1,
+        "n_estimators": 300,
+        "min_child_weight": 3,
+        "max_depth": 2,
+        "learning_rate": 0.1,
+        "gamma": 0,
+        "colsample_bytree": 1.0
+    },
+    "best_groups": [
+        "momentum",
+        "trend",
+        "volatility",
+        "volume"
+    ],
+    "best_k": 10,
+    "final_accuracy_full": 0.7137501944314824
+}

@@ -3,142 +3,184 @@ import numpy as np
 import pandas_ta as ta
 import joblib
 import os
+import json
 import warnings
 
 warnings.filterwarnings('ignore')
 
 # --- Configuration ---
 MODEL_DIR = "models"
-MODEL_FILENAME = "xgb_hmm_model.joblib"
-SCALER_FILENAME = "scaler.joblib"
-HMM_FILENAME = "hmm_model.joblib"
-HMM_SCALER_FILENAME = "hmm_scaler.joblib"
+MODEL_FILENAME = "best_xgb_model.joblib"
+BEST_FEATURES_FILENAME = "best_features_list.json"
+
+# ==================================================================
+#   FEATURE ENGINEERING CATEGORIES
+# ==================================================================
+
+def add_momentum_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.ta.rsi(length=14, append=True)
+    df.ta.roc(length=12, append=True)
+    df.ta.stoch(k=14, d=3, append=True)
+    df.ta.stochrsi(length=14, append=True)
+    df.ta.cci(length=14, append=True)
+    df.ta.willr(length=14, append=True)
+    df.ta.ao(append=True)
+    df.ta.mom(length=10, append=True)
+    df.ta.tsi(length_fast=13, length_slow=25, append=True)
+    df.ta.uo(append=True)
+    return df
+
+def add_overlap_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.ta.ema(length=10, append=True)
+    df.ta.ema(length=20, append=True)
+    df.ta.ema(length=50, append=True)
+    df.ta.ema(length=100, append=True)
+    df.ta.sma(length=200, append=True)
+    df.ta.hma(length=9, append=True)
+    df.ta.tema(length=9, append=True)
+    df.ta.psar(append=True)
+    df.ta.supertrend(length=7, multiplier=3, append=True)
+    
+    vol_col = 'volume' if 'volume' in df.columns else 'total_vol'
+    if vol_col in df.columns:
+        df.ta.vwap(high=df['high'], low=df['low'], close=df['close'], volume=df[vol_col], append=True)
+    return df
+
+def add_trend_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.ta.macd(fast=12, slow=26, append=True)
+    df.ta.adx(length=14, append=True)
+    df.ta.aroon(length=14, append=True)
+    df.ta.vortex(length=14, append=True)
+    df.ta.dpo(length=20, centered=False, append=True)
+    df.ta.trix(length=30, append=True)
+    df.ta.cksp(append=True)
+    return df
+
+def add_volatility_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.ta.atr(length=14, append=True)
+    df.ta.natr(length=14, append=True)
+    df.ta.ui(length=14, append=True)
+
+    bbands = df.ta.bbands(length=20, append=False)
+    if bbands is not None and not bbands.empty:
+        bbp_cols = [c for c in bbands.columns if c.startswith('BBP')]
+        bbb_cols = [c for c in bbands.columns if c.startswith('BBB')]
+        if bbp_cols: df[bbp_cols[0]] = bbands[bbp_cols[0]]
+        if bbb_cols: df[bbb_cols[0]] = bbands[bbb_cols[0]]
+
+    kc = df.ta.kc(append=False)
+    if kc is not None and not kc.empty:
+        kcp_cols = [c for c in kc.columns if c.startswith('KCP')]
+        if kcp_cols: df[kcp_cols[0]] = kc[kcp_cols[0]]
+
+    dc = df.ta.donchian(append=False)
+    if dc is not None and not dc.empty:
+        dcp_cols = [c for c in dc.columns if c.startswith('DCP')]
+        if dcp_cols: df[dcp_cols[0]] = dc[dcp_cols[0]]
+    return df
+
+def add_volume_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    vol_col = 'volume' if 'volume' in df.columns else 'total_vol'
+    if vol_col in df.columns:
+        df.ta.obv(close=df['close'], volume=df[vol_col], append=True)
+        df.ta.mfi(high=df['high'], low=df['low'], close=df['close'], volume=df[vol_col], length=14, append=True)
+        df.ta.ad(high=df['high'], low=df['low'], close=df['close'], volume=df[vol_col], append=True)
+        df.ta.cmf(high=df['high'], low=df['low'], close=df['close'], volume=df[vol_col], append=True)
+        df.ta.eom(high=df['high'], low=df['low'], close=df['close'], volume=df[vol_col], append=True)
+        df.ta.nvi(close=df['close'], volume=df[vol_col], append=True)
+        df.ta.pvi(close=df['close'], volume=df[vol_col], append=True)
+    return df
+
+def add_statistics_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.ta.zscore(length=30, append=True)
+    df.ta.entropy(length=30, append=True)
+    df.ta.kurtosis(length=30, append=True)
+    df.ta.skew(length=30, append=True)
+    df.ta.variance(length=30, append=True)
+    df.ta.mad(length=30, append=True)
+    return df
+
+def add_candle_category(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    patterns_to_add = [
+        'cdl_doji', 'cdl_hammer', 'cdl_engulfing', 'cdl_morningstar', 'cdl_eveningstar',
+        'cdl_shootingstar', 'cdl_hangingman', 'cdl_marubozu', 'cdl_3whitesoldiers',
+        'cdl_3blackcrows', 'cdl_inside', 'cdl_spinningtop'
+    ]
+    for pattern_name in patterns_to_add:
+        if hasattr(df.ta, pattern_name):
+            getattr(df.ta, pattern_name)(append=True)
+    return df
+
+GROUP_FUNCS = {
+    "momentum": add_momentum_category,
+    "overlap": add_overlap_category,
+    "trend": add_trend_category,
+    "volatility": add_volatility_category,
+    "volume": add_volume_category,
+    "statistics": add_statistics_category,
+    "candle": add_candle_category,
+}
 
 class Predictor:
     def __init__(self, model_dir=MODEL_DIR):
         self.model_dir = model_dir
         self.model = None
-        self.scaler = None
-        self.hmm_model = None
-        self.hmm_scaler = None
+        self.best_features = None
         self.load_models()
 
     def load_models(self):
-        """Loads trained models and scalers."""
+        """Loads trained model and feature list."""
         try:
             self.model = joblib.load(os.path.join(self.model_dir, MODEL_FILENAME))
-            self.scaler = joblib.load(os.path.join(self.model_dir, SCALER_FILENAME))
-            self.hmm_model = joblib.load(os.path.join(self.model_dir, HMM_FILENAME))
-            self.hmm_scaler = joblib.load(os.path.join(self.model_dir, HMM_SCALER_FILENAME))
-            print("Models loaded successfully.")
+            
+            with open(os.path.join(self.model_dir, BEST_FEATURES_FILENAME), "r") as f:
+                self.best_features = json.load(f)
+                
+            print(f"Model loaded. Expecting {len(self.best_features)} features.")
         except FileNotFoundError as e:
             print(f"Error loading models: {e}")
             raise
 
     def preprocess_data(self, df):
-        """Applies the same feature engineering as training."""
-        df = df.copy()
+        """Applies ALL feature engineering to ensure we have the required columns."""
+        df_processed = df.copy()
         
-        # Basic Features
-        df['log_return'] = np.log(df['close'] / df['close'].shift(1))
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        
-        # Volume Features
-        # Note: 'taker_buy_vol' and 'maker_sell_vol' might be available from API
-        # If not, we assume 'ask_vol' and 'bid_vol' are present or derived
-        # For Binance klines, we usually get 'taker_buy_base_asset_volume'
-        # We need to map API columns to what the model expects
-        
-        if 'volume_delta' not in df.columns:
-             # Approximation if exact bid/ask not available:
-             # volume_delta ~ 2 * taker_buy_vol - total_vol
-             # (Assuming taker buy is aggressive buy, rest is aggressive sell)
-             if 'taker_buy_vol' in df.columns:
-                 df['volume_delta'] = 2 * df['taker_buy_vol'] - df['volume']
-             else:
-                 df['volume_delta'] = 0 # Fallback
-        
-        df["cvd"] = df["volume_delta"].cumsum()
-        for window in [4, 12, 24]:
-            df[f"vol_delta_rolling_{window}"] = df["volume_delta"].rolling(window).sum()
-            
-        # Volatility Features
-        df['range_pct'] = (df['high'] - df['low']) / df['close']
-        bbands = df.ta.bbands(length=20, std=2)
-        df = pd.concat([df, bbands], axis=1)
-        
-        # pandas_ta column names can vary by version, so we use the columns from the result
-        try:
-            df['bb_width'] = (df['BBU_20_2.0'] - df['BBL_20_2.0']) / df['BBM_20_2.0']
-        except KeyError:
-            # Fallback for some versions that might use different naming
-            bbu = [c for c in df.columns if c.startswith('BBU_')][0]
-            bbl = [c for c in df.columns if c.startswith('BBL_')][0]
-            bbm = [c for c in df.columns if c.startswith('BBM_')][0]
-            df['bb_width'] = (df[bbu] - df[bbl]) / df[bbm]
-        
-        # Trend Features
-        df['ema_12'] = ta.ema(df['close'], length=12)
-        df['ema_26'] = ta.ema(df['close'], length=26)
-        df['trend_ema'] = np.where(df['ema_12'] > df['ema_26'], 1, -1)
-        
-        return df
+        # Ensure time index if needed (though pandas-ta usually handles it)
+        if 'time' in df_processed.columns and not isinstance(df_processed.index, pd.DatetimeIndex):
+            df_processed['time'] = pd.to_datetime(df_processed['time'])
+            df_processed.set_index('time', inplace=True)
 
-    def add_hmm_features(self, df):
-        """Adds HMM state probabilities."""
-        hmm_data = df[['log_return', 'range_pct', 'volume_delta']].copy()
-        # Handle potential zeros in volume for log
-        hmm_data['log_volume'] = np.log(df['volume'] + 1)
-        
-        # We need to handle NaNs created by rolling windows
-        # For prediction, we usually care about the LAST row, 
-        # so we just need enough history to fill the windows.
-        
-        # Fill NaNs for HMM input to avoid errors, but keep track of valid indices
-        hmm_data = hmm_data.fillna(0) 
-        
-        X_hmm = self.hmm_scaler.transform(hmm_data)
-        state_probs = self.hmm_model.predict_proba(X_hmm)
-        
-        for i in range(3):
-            df[f'hmm_prob_{i}'] = state_probs[:, i]
-            
-        return df
+        # Apply all groups
+        for g_name, g_func in GROUP_FUNCS.items():
+            try:
+                df_processed = g_func(df_processed)
+            except Exception as e:
+                print(f"Warning: Error in group '{g_name}': {e}")
+                
+        return df_processed
 
     def _prepare_features(self, df):
         """Shared preprocessing logic for single and batch prediction."""
-        # 1. Preprocess
+        # 1. Generate ALL features
         df_processed = self.preprocess_data(df)
         
-        # 2. Add HMM
-        df_processed = self.add_hmm_features(df_processed)
+        # 2. Select only the features the model was trained on
+        # Check if all required features exist
+        missing_cols = [c for c in self.best_features if c not in df_processed.columns]
+        if missing_cols:
+            print(f"Warning: {len(missing_cols)} features missing from data: {missing_cols[:5]}...")
+            # Fill missing with 0 to prevent crash, but this is not ideal
+            for c in missing_cols:
+                df_processed[c] = 0
         
-        # 3. Select Features
-        feature_cols = [
-            'volume_delta', 'cvd', 'vol_delta_rolling_4', 'vol_delta_rolling_12', 'vol_delta_rolling_24',
-            'RSI_14', 'MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9', 'trend_ema',
-            'bb_width', 'BBP_20_2.0', 'range_pct',
-            'hmm_prob_0', 'hmm_prob_1', 'hmm_prob_2'
-        ]
-        
-        # Handle BBP column name variation
-        if 'BBP_20_2.0' not in df_processed.columns:
-            # Try to find BBP column
-            bbp_cols = [c for c in df_processed.columns if c.startswith('BBP_')]
-            if bbp_cols:
-                df_processed['BBP_20_2.0'] = df_processed[bbp_cols[0]]
-            else:
-                # Calculate manually if missing: (Close - Lower) / (Upper - Lower)
-                try:
-                    bbu = [c for c in df_processed.columns if c.startswith('BBU_')][0]
-                    bbl = [c for c in df_processed.columns if c.startswith('BBL_')][0]
-                    df_processed['BBP_20_2.0'] = (df_processed['close'] - df_processed[bbl]) / (df_processed[bbu] - df_processed[bbl])
-                except IndexError:
-                    # print("Warning: Could not calculate BBP. Filling with 0.")
-                    df_processed['BBP_20_2.0'] = 0
-                    
-        return df_processed, feature_cols
+        return df_processed, self.best_features
 
     def predict(self, df):
         """
@@ -153,16 +195,15 @@ class Predictor:
         # Check for NaNs in the last row (e.g. not enough history)
         if last_row.isna().any().any():
             print("Warning: NaNs in features. Need more history.")
+            # Try to fill with previous values if possible, or return None
+            # For now, return None to indicate insufficient data
             return None, None, None
 
-        # 4. Scale
-        X_scaled = self.scaler.transform(last_row)
+
+        pred_class = self.model.predict(last_row)[0]
+        pred_proba = self.model.predict_proba(last_row)[0]
         
-        # 5. Predict
-        pred_class = self.model.predict(X_scaled)[0]
-        pred_proba = self.model.predict_proba(X_scaled)[0]
-        
-        timestamp = df_processed.iloc[-1]['time'] if 'time' in df_processed.columns else df_processed.index[-1]
+        timestamp = df_processed.iloc[-1].name if isinstance(df_processed.index, pd.DatetimeIndex) else df_processed.index[-1]
         
         return pred_class, pred_proba, timestamp
 
@@ -179,12 +220,9 @@ class Predictor:
         if df_valid.empty:
             return pd.DataFrame()
 
-        # 4. Scale
-        X_scaled = self.scaler.transform(df_valid[feature_cols])
-        
-        # 5. Predict
-        df_valid['prediction'] = self.model.predict(X_scaled)
-        probs = self.model.predict_proba(X_scaled)
+        # Predict
+        df_valid['prediction'] = self.model.predict(df_valid[feature_cols])
+        probs = self.model.predict_proba(df_valid[feature_cols])
         df_valid['prob_down'] = probs[:, 0]
         df_valid['prob_sideways'] = probs[:, 1]
         df_valid['prob_up'] = probs[:, 2]
@@ -194,16 +232,15 @@ class Predictor:
 if __name__ == "__main__":
     # Test with dummy data
     print("Testing Predictor...")
-    # Create dummy dataframe matching structure
-    dates = pd.date_range(start='2024-01-01', periods=100, freq='15T')
+    dates = pd.date_range(start='2024-01-01', periods=200, freq='15T')
     df_dummy = pd.DataFrame({
         'time': dates,
-        'open': np.random.rand(100) * 100 + 40000,
-        'high': np.random.rand(100) * 100 + 40100,
-        'low': np.random.rand(100) * 100 + 39900,
-        'close': np.random.rand(100) * 100 + 40000,
-        'volume': np.random.rand(100) * 10,
-        'taker_buy_vol': np.random.rand(100) * 5
+        'open': np.random.rand(200) * 100 + 40000,
+        'high': np.random.rand(200) * 100 + 40100,
+        'low': np.random.rand(200) * 100 + 39900,
+        'close': np.random.rand(200) * 100 + 40000,
+        'volume': np.random.rand(200) * 10,
+        'taker_buy_vol': np.random.rand(200) * 5
     })
     
     try:

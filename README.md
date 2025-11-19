@@ -10,15 +10,21 @@ Imagine having a "magic ball" that doesn't just guess, but scientifically analyz
 
 This project isn't just another technical indicator. It's a sophisticated machine learning system that combines:
 1.  **"Oracle" Labeling**: We use a zero-lag smoothing technique to define the "true" trend, training our model on what *actually* happened, not just lagging indicators.
-2.  **Hidden Markov Models (HMM)**: The market has moods. Sometimes it's a raging bull, sometimes a sleeping bear, and sometimes it's just choppy. We use HMMs to decode these hidden "regimes" and feed them into our predictor.
-3.  **XGBoost Classification**: We use a powerful gradient boosting model to synthesize volume, volatility, momentum, and market regimes into a single prediction.
+2.  **Advanced Feature Engineering**: We generate hundreds of technical indicators across multiple categories (Momentum, Trend, Volatility, Volume, Overlap, Statistics, Candles).
+3.  **Automated Feature Selection**: The training pipeline intelligently selects the optimal combination of indicator groups and the top-k most important features to maximize accuracy and reduce noise.
+4.  **XGBoost Classification**: We use a powerful gradient boosting model tuned via Randomized Search with Walk-Forward Validation to predict market direction.
 
 ## 🛠️ Project Structure
 
-*   **`train.py`**: The brain of the operation. Loads data, engineers features (including HMM), trains the XGBoost model, and saves the "brain" to the `models/` directory.
-*   **`predict.py`**: The inference engine. Loads the trained model and generates predictions for new data on the fly.
+*   **`train.py`**: The brain of the operation. It performs a full AutoML pipeline:
+    *   Loads data and generates Oracle targets.
+    *   Iteratively tests combinations of indicator groups (e.g., Momentum + Volatility).
+    *   Selects the top-k best features based on importance.
+    *   Tunes XGBoost hyperparameters using RandomizedSearchCV and TimeSeriesSplit.
+    *   Saves the best model and the list of selected features to `models/`.
+*   **`predict.py`**: The inference engine. Loads the trained model and the list of best features to generate predictions for new data.
 *   **`app.py`**: A FastAPI web service that connects to Binance, fetches live data, caches it in a local database, and serves up fresh predictions.
-*   **`midterm_project_bitcoin_price_direction_classificator__prefin.py`**: The research notebook (in script format) detailing the entire journey from data analysis to backtesting.
+*   **`midterm_project_bitcoin_price_direction_classificator__III.py`**: The advanced research script detailing the entire journey from data analysis to the final optimized pipeline.
 
 ## ⚡ How to Run
 
@@ -66,7 +72,7 @@ docker run --rm -v %cd%:/app xgb_fints_project python train.py
 docker run --rm -v $(pwd):/app xgb_fints_project python train.py
 ```
 
-This will create a `models/` directory with the trained artifacts (`xgb_hmm_model.joblib`, `scaler.joblib`, etc.).
+This will create a `models/` directory with the trained artifacts (`best_xgb_model.joblib`, `best_features_list.json`, etc.).
 
 ### 3. Launch the Web Service 🚀
 Spin up the prediction service with a single command:
@@ -84,7 +90,7 @@ Open your browser and go to:
 You'll see a simple interface. Click **"Update Data & Predict"** to fetch the latest market data from Binance and consult the Oracle.
 
 ## 📊 Backtesting Results
-Our research shows that while regression fails miserably ($R^2 \approx 0$), classification is viable. By filtering for high-confidence setups and understanding market regimes, the model demonstrates predictive power significantly better than a coin flip.
+Our research shows that while regression fails miserably ($R^2 \approx 0$), classification is viable. By filtering for high-confidence setups and understanding market regimes, the model demonstrates predictive power significantly better than a coin flip (~69% accuracy on test data).
 
 ---
 *Disclaimer: This is a research project, not financial advice. Trading cryptocurrencies involves significant risk. Use this "magic ball" responsibly!* 😉

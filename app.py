@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta, timezone
 import requests
 import sqlite3
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, and_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -215,6 +215,50 @@ def backfill_data():
     finally:
         db.close()
 
+def ensure_data_availability(start_date_str, end_date_str):
+    """Ensures data exists for the requested range, backfilling if necessary."""
+    start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    
+    # Prevent fetching future data beyond tomorrow (to account for timezone diffs)
+    max_allowed_date = datetime.now(timezone.utc).date() + timedelta(days=1)
+    if end_date > max_allowed_date:
+        end_date = max_allowed_date
+    
+    db = SessionLocal()
+    try:
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            
+            day_start = datetime.combine(current_date, datetime.min.time())
+            day_end = datetime.combine(current_date, datetime.max.time())
+            
+            count = db.query(Kline).filter(
+                Kline.open_time >= day_start,
+                Kline.open_time <= day_end
+            ).count()
+            
+            if count < 90:
+                print(f"Data missing for {date_str} (found {count}). Backfilling...")
+                success = download_and_import_binance_vision_data(date_str)
+                if not success:
+                    print(f"Binance Vision failed for {date_str}. Trying API fallback...")
+                    start_ts = int(day_start.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    end_ts = int(day_end.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    
+                    klines_data = fetch_binance_data(
+                        start_time=day_start.replace(tzinfo=timezone.utc),
+                        end_time=day_end.replace(tzinfo=timezone.utc),
+                        limit=1000
+                    )
+                    if klines_data:
+                        save_klines_to_db(klines_data)
+            
+            current_date += timedelta(days=1)
+    finally:
+        db.close()
+
 def save_klines_to_db(klines_data):
     """Helper to save API klines to DB."""
     if not klines_data: return
@@ -324,7 +368,8 @@ def generate_plot(df, prediction, timestamp, start_date=None, end_date=None):
     plot_df = create_target_labels(plot_df)
     
     plt.plot(plot_df['time'], plot_df['close'], label='Close Price', color='black', linewidth=1)
-    plt.plot(plot_df['time'], plot_df['smoothed_close'], label='Smoothed Trend', color='blue', linestyle='--', alpha=0.7)
+    # Removed smoothed trend line as requested
+    # plt.plot(plot_df['time'], plot_df['smoothed_close'], label='Smoothed Trend', color='blue', linestyle='--', alpha=0.7)
     
     # Highlight historical regions
     # 0: DOWN (Red), 1: SIDEWAYS (Gray), 2: UP (Green)
@@ -467,16 +512,42 @@ class PredictionRequest(BaseModel):
 
 @app.post("/predict")
 async def make_prediction(request: PredictionRequest, background_tasks: BackgroundTasks):
-    # 1. Update Data
+    # 1. Validate Date Range
+    if request.start_date and request.end_date:
+        start = datetime.strptime(request.start_date, "%Y-%m-%d")
+        end = datetime.strptime(request.end_date, "%Y-%m-%d")
+        if (end - start).days > 14:
+            return {"error": "Date range cannot exceed 2 weeks"}
+        
+        # Ensure data availability for the requested range
+        ensure_data_availability(request.start_date, request.end_date)
+    
+    # 2. Update Data (Latest)
     success = update_database()
     if not success:
         return {"error": "Failed to fetch data from Binance"}
     
-    # 2. Get Data
-    # Get more data for plotting (7 days * 96 candles = 672)
+    # 3. Get Data
     db = SessionLocal()
     try:
-        klines = db.query(Kline).order_by(Kline.open_time.desc()).limit(2000).all()
+        query = db.query(Kline).order_by(Kline.open_time.desc())
+        
+        if request.start_date:
+            # Add buffer for indicators (e.g. 2 days before start date)
+            start_buffer = datetime.strptime(request.start_date, "%Y-%m-%d") - timedelta(days=2)
+            query = query.filter(Kline.open_time >= start_buffer)
+            
+        if request.end_date:
+            # End date inclusive (end of day)
+            end_dt = datetime.strptime(request.end_date, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(Kline.open_time < end_dt)
+            
+        # If no dates, limit to recent history
+        if not request.start_date:
+            query = query.limit(2000)
+            
+        klines = query.all()
+        
         if not klines:
             return {"error": "Not enough data in database"}
         
@@ -500,7 +571,7 @@ async def make_prediction(request: PredictionRequest, background_tasks: Backgrou
     if df is None or len(df) < 50:
         return {"error": "Not enough data in database"}
     
-    # 3. Predict
+    # 4. Predict
     if predictor is None:
         return {"error": "Model not loaded"}
         

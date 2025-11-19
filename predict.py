@@ -106,11 +106,8 @@ class Predictor:
             
         return df
 
-    def predict(self, df):
-        """
-        Generates prediction for the latest available data point.
-        Returns: (prediction_class, probabilities, timestamp)
-        """
+    def _prepare_features(self, df):
+        """Shared preprocessing logic for single and batch prediction."""
         # 1. Preprocess
         df_processed = self.preprocess_data(df)
         
@@ -138,15 +135,19 @@ class Predictor:
                     bbl = [c for c in df_processed.columns if c.startswith('BBL_')][0]
                     df_processed['BBP_20_2.0'] = (df_processed['close'] - df_processed[bbl]) / (df_processed[bbu] - df_processed[bbl])
                 except IndexError:
-                    print("Warning: Could not calculate BBP. Filling with 0.")
+                    # print("Warning: Could not calculate BBP. Filling with 0.")
                     df_processed['BBP_20_2.0'] = 0
+                    
+        return df_processed, feature_cols
+
+    def predict(self, df):
+        """
+        Generates prediction for the latest available data point.
+        Returns: (prediction_class, probabilities, timestamp)
+        """
+        df_processed, feature_cols = self._prepare_features(df)
         
         # Get the last row (latest completed bar)
-        # Note: In training we shifted features by 1. 
-        # For live prediction, we use the features of the *just closed* bar 
-        # to predict the *next* bar's direction.
-        # So we do NOT shift here, we just take the last row.
-        
         last_row = df_processed.iloc[[-1]][feature_cols]
         
         # Check for NaNs in the last row (e.g. not enough history)
@@ -164,6 +165,31 @@ class Predictor:
         timestamp = df_processed.iloc[-1]['time'] if 'time' in df_processed.columns else df_processed.index[-1]
         
         return pred_class, pred_proba, timestamp
+
+    def predict_batch(self, df):
+        """
+        Generates predictions for the entire dataframe.
+        Returns: DataFrame with 'prediction' and 'probabilities' columns
+        """
+        df_processed, feature_cols = self._prepare_features(df)
+        
+        # Drop NaNs for prediction
+        df_valid = df_processed.dropna(subset=feature_cols).copy()
+        
+        if df_valid.empty:
+            return pd.DataFrame()
+
+        # 4. Scale
+        X_scaled = self.scaler.transform(df_valid[feature_cols])
+        
+        # 5. Predict
+        df_valid['prediction'] = self.model.predict(X_scaled)
+        probs = self.model.predict_proba(X_scaled)
+        df_valid['prob_down'] = probs[:, 0]
+        df_valid['prob_sideways'] = probs[:, 1]
+        df_valid['prob_up'] = probs[:, 2]
+        
+        return df_valid
 
 if __name__ == "__main__":
     # Test with dummy data

@@ -301,4 +301,4 @@ async def run_backtest_endpoint(request: BacktestRequest):
     return {"backtest_return":backtest_return,"backtest_trades":backtest_trades,"trades":trades_serialized}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=11111)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

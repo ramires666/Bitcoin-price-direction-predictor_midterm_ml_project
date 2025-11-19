@@ -4,7 +4,7 @@ services:
   web:
     build: .
     ports:
-      - "11111:11111"
+      - "8080:8080"
     volumes:
       - ./models:/app/models
       - ./data/crypto_data.db:/app/crypto_data.db

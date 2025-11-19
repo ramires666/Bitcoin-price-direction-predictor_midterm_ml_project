@@ -89,6 +89,60 @@ Open your browser and go to:
 
 You'll see a simple interface. Click **"Update Data & Predict"** to fetch the latest market data from Binance and consult the Oracle.
 
+## ☁️ Deployment to Google Cloud Run
+
+Want to take it to the cloud? Here is a step-by-step guide to deploying this service to Google Cloud Run.
+
+### 1. One-time Project Setup
+
+Initialize your Google Cloud environment and enable the necessary services:
+
+```bash
+gcloud init
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com
+```
+
+*Note: You can find your `YOUR_PROJECT_ID` in the Google Cloud Console dashboard.*
+
+### 2. Build the Docker Image
+
+Build the image locally (ensure you are in the directory with the `Dockerfile`):
+
+```bash
+docker build -t gcr.io/YOUR_PROJECT_ID/webservice .
+```
+
+### 3. Push to Container Registry
+
+Configure Docker to authenticate with GCP and push your image:
+
+```bash
+gcloud auth configure-docker
+docker push gcr.io/YOUR_PROJECT_ID/webservice
+```
+
+### 4. Deploy to Cloud Run
+
+Deploy the service to the cloud:
+
+```bash
+gcloud run deploy webservice \
+  --image gcr.io/YOUR_PROJECT_ID/webservice \
+  --platform managed \
+  --region europe-central2 \
+  --allow-unauthenticated
+```
+
+Once completed, you will see a URL like `URL: https://...run.app`. This is your live application address.
+
+---
+
+**Live Demo:**
+The service is currently running and accessible here:
+👉 **https://webservice-732860276994.europe-central2.run.app/**
+
 ## 📊 Backtesting Results
 Our research shows that while regression fails miserably ($R^2 \approx 0$), classification is viable. By filtering for high-confidence setups and understanding market regimes, the model demonstrates predictive power significantly better than a coin flip (~69% accuracy on test data).
 

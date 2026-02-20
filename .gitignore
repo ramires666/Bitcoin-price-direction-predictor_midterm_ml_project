@@ -10,3 +10,4 @@ wheels/
 .venv
 /.venv-rapids/
 /.venv-rapids-py310/
+*.tar

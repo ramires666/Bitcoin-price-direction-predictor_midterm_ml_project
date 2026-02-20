@@ -174,75 +174,294 @@ def generate_plot(df, start_date=None, end_date=None):
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     return """
-    <html><head><title>BTC Predictor</title>
-    <style>
-        body{font-family:sans-serif;max-width:1000px;margin:auto;padding:20px}
-        .card{border:1px solid #ddd;padding:20px;border-radius:8px;margin-top:20px}
-        button{padding:10px 20px;font-size:16px;cursor:pointer;background-color:#007bff;color:white;border:none;border-radius:4px}
-        button:hover{background-color:#0056b3}
-        #prediction-info, #backtest-results{margin-top:20px}
-        img{max-width:100%;height:auto;margin-top:20px}
-        .controls{margin-bottom:15px;display:flex;gap:10px;align-items:center}
-        input[type="datetime-local"]{padding:8px;border:1px solid #ccc;border-radius:4px}
-    </style>
-    </head><body onload="loadInitialData()">
-        <h1>Bitcoin Price Direction Predictor</h1>
-        <div id="prediction-info"><p>Loading initial prediction...</p></div>
-        <div id="plot-container"></div>
-        <div class="card">
-            <div class="controls">
-                <label>From:</label><input type="datetime-local" id="start-date">
-                <label>To:</label><input type="datetime-local" id="end-date">
-                <button onclick="runBacktest()">Run Backtest</button>
-            </div>
-            <div id="backtest-results"></div>
-        </div>
-        <script>
-            function toLocalISOString(date){const p=(n)=>n.toString().padStart(2,'0');return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`}
-            
-            const today = new Date();
-            today.setHours(23, 59, 0, 0);
+    <!doctype html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>BTC Direction Console</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+        <script src="https://unpkg.com/lucide@latest"></script>
+        <style>
+            :root{
+                --bg:#0b111e;
+                --bg-soft:#121a2c;
+                --card:#111a2e;
+                --line:#2a3552;
+                --text:#e5ecff;
+                --muted:#8ea0c8;
+                --accent:#1ac7b4;
+                --up:#28d87c;
+                --down:#ff6b6b;
+                --flat:#f7b955;
+                --shadow:0 22px 50px rgba(0, 0, 0, 0.35);
+            }
+            *{box-sizing:border-box}
+            body{
+                margin:0;
+                font-family:'Space Grotesk',sans-serif;
+                color:var(--text);
+                background:
+                    radial-gradient(900px 560px at -10% -10%, #123053 0%, transparent 62%),
+                    radial-gradient(900px 560px at 110% 110%, #43244e 0%, transparent 62%),
+                    linear-gradient(135deg, #090e1a, #0d1424 45%, #11172a);
+                min-height:100vh;
+            }
+            .shell{max-width:1150px;margin:34px auto;padding:0 16px}
+            .hero,.panel{
+                background:linear-gradient(160deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+                border:1px solid rgba(255,255,255,0.12);
+                border-radius:22px;
+                box-shadow:var(--shadow);
+                backdrop-filter:blur(5px);
+            }
+            .hero{padding:20px 22px;display:flex;justify-content:space-between;gap:12px;align-items:center}
+            .hero h1{margin:0;font-size:29px;letter-spacing:.3px}
+            .hero p{margin:6px 0 0;color:var(--muted)}
+            .brand{display:flex;align-items:center;gap:10px}
+            .icon-wrap{width:38px;height:38px;border-radius:10px;background:rgba(26,199,180,.16);display:grid;place-items:center}
+            .grid{margin-top:14px;display:grid;grid-template-columns:1.12fr .88fr;gap:14px}
+            .panel{padding:18px}
+            .title{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:8px;color:#cedbff}
+            #prediction-info .loading,#backtest-results .loading{color:var(--muted)}
+            .signal-pill{
+                display:inline-flex;align-items:center;gap:7px;
+                padding:7px 12px;border-radius:999px;border:1px solid transparent;font-weight:700;font-size:12px
+            }
+            .signal-up{color:var(--up);background:rgba(40,216,124,.12);border-color:rgba(40,216,124,.35)}
+            .signal-down{color:var(--down);background:rgba(255,107,107,.12);border-color:rgba(255,107,107,.35)}
+            .signal-flat{color:var(--flat);background:rgba(247,185,85,.12);border-color:rgba(247,185,85,.35)}
+            .metrics{margin-top:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+            .metric{padding:10px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08)}
+            .metric .name{font-size:12px;color:var(--muted)}
+            .metric .bar{margin-top:7px;height:7px;border-radius:999px;background:#232e4a;overflow:hidden}
+            .metric .fill{display:block;height:100%}
+            .metric .value{margin-top:7px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+            .chart-wrap{margin-top:10px;overflow:hidden;border-radius:16px;border:1px solid rgba(255,255,255,.1);background:rgba(10,15,27,.75)}
+            .plot-image{display:block;width:100%;height:auto}
+            .controls{
+                display:grid;
+                grid-template-columns:1fr 1fr auto;
+                gap:10px;
+                align-items:end;
+                margin-bottom:12px
+            }
+            label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+            input[type="datetime-local"]{
+                width:100%;padding:10px 12px;border-radius:11px;
+                border:1px solid var(--line);background:#0f1628;color:var(--text);font-family:'IBM Plex Mono',monospace
+            }
+            button{
+                height:42px;padding:0 15px;border:0;border-radius:11px;cursor:pointer;
+                background:linear-gradient(135deg,var(--accent),#39f0d1);color:#041218;font-weight:700;
+                display:flex;align-items:center;gap:8px;justify-content:center
+            }
+            button:hover{filter:brightness(1.05)}
+            .bt-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+            .bt-main{font-size:20px;font-weight:700}
+            .bt-main.up{color:var(--up)}
+            .bt-main.down{color:var(--down)}
+            .bt-main.flat{color:var(--flat)}
+            .bt-sub{color:var(--muted);font-size:13px}
+            .table-wrap{margin-top:12px;max-height:290px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:12px}
+            table{width:100%;border-collapse:collapse;font-size:12px}
+            th,td{padding:9px 10px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap}
+            th{position:sticky;top:0;background:#17223b;color:#d3e0ff;text-align:left}
+            .dir-long{color:var(--up);font-weight:700}
+            .dir-short{color:var(--down);font-weight:700}
+            .ret-pos{color:var(--up);font-weight:700}
+            .ret-neg{color:var(--down);font-weight:700}
+            .error{
+                margin-top:6px;padding:10px 12px;border-radius:10px;
+                border:1px solid rgba(255,107,107,.35);color:#ffb6b6;background:rgba(255,107,107,.1)
+            }
+            @media(max-width:980px){
+                .grid{grid-template-columns:1fr}
+            }
+            @media(max-width:640px){
+                .hero{padding:16px}
+                .hero h1{font-size:22px}
+                .metrics{grid-template-columns:1fr}
+                .controls{grid-template-columns:1fr}
+            }
+        </style>
+    </head>
+    <body>
+        <main class="shell">
+            <section class="hero">
+                <div class="brand">
+                    <div class="icon-wrap"><i data-lucide="bitcoin"></i></div>
+                    <div>
+                        <h1>BTC Direction Console</h1>
+                        <p>Real-time signal and backtest dashboard</p>
+                    </div>
+                </div>
+                <div class="signal-pill signal-flat"><i data-lucide="activity"></i>Live model</div>
+            </section>
 
-            const twoDaysAgo = new Date();
-            twoDaysAgo.setDate(today.getDate() - 2);
-            twoDaysAgo.setHours(0, 0, 0, 0);
-            
-            document.getElementById('end-date').value = toLocalISOString(today);
-            document.getElementById('start-date').value = toLocalISOString(twoDaysAgo);
+            <section class="grid">
+                <article class="panel">
+                    <h2 class="title"><i data-lucide="trending-up"></i>Latest Prediction</h2>
+                    <div id="prediction-info"><p class="loading">Loading prediction...</p></div>
+                    <div id="plot-container" class="chart-wrap"></div>
+                </article>
+
+                <article class="panel">
+                    <h2 class="title"><i data-lucide="flask-conical"></i>Backtest</h2>
+                    <div class="controls">
+                        <div>
+                            <label for="start-date">From</label>
+                            <input type="datetime-local" id="start-date">
+                        </div>
+                        <div>
+                            <label for="end-date">To</label>
+                            <input type="datetime-local" id="end-date">
+                        </div>
+                        <button id="run-backtest-btn" onclick="runBacktest()"><i data-lucide="play"></i>Run Backtest</button>
+                    </div>
+                    <div id="backtest-results"><p class="loading">Select dates and run backtest.</p></div>
+                </article>
+            </section>
+        </main>
+
+        <script>
+            const labels = {0: 'DOWN', 1: 'SIDEWAYS', 2: 'UP'};
+            const tones = {0: 'signal-down', 1: 'signal-flat', 2: 'signal-up'};
+            const icons = {0: 'trending-down', 1: 'minus', 2: 'trending-up'};
+
+            function toLocalISOString(date){
+                const p=(n)=>n.toString().padStart(2,'0');
+                return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+            }
+
+            function setDefaultRange(){
+                const today = new Date();
+                today.setHours(23, 59, 0, 0);
+                const twoDaysAgo = new Date(today);
+                twoDaysAgo.setDate(today.getDate() - 2);
+                twoDaysAgo.setHours(0, 0, 0, 0);
+                document.getElementById('end-date').value = toLocalISOString(today);
+                document.getElementById('start-date').value = toLocalISOString(twoDaysAgo);
+            }
+
+            function refreshIcons(){
+                if (window.lucide) window.lucide.createIcons();
+            }
+
+            function probabilityMetric(name, value, color){
+                return `
+                    <div class="metric">
+                        <div class="name">${name}</div>
+                        <div class="bar"><span class="fill" style="width:${value.toFixed(1)}%;background:${color}"></span></div>
+                        <div class="value">${value.toFixed(1)}%</div>
+                    </div>
+                `;
+            }
+
+            function renderPlot(tag){
+                const plotDiv = document.getElementById('plot-container');
+                plotDiv.innerHTML = `<img class="plot-image" src="/plot?t=${Date.now()}" alt="${tag} plot">`;
+            }
 
             async function loadInitialData(){
-                const predDiv=document.getElementById('prediction-info'),plotDiv=document.getElementById('plot-container');
+                const predDiv = document.getElementById('prediction-info');
                 try{
-                    const response=await fetch('/initial_load');
-                    const data=await response.json();
-                    if(data.error){predDiv.innerHTML=`<span style="color:red">Error: ${data.error}</span>`;return}
-                    const color={'2':'green','0':'red'}[data.prediction]||'gray',labels={0:'DOWN',1:'SIDEWAYS',2:'UP'};
-                    predDiv.innerHTML=`<h3>Prediction for next candle: <span style="color:${color}">${labels[data.prediction]}</span></h3><p>Time: ${data.timestamp}</p>
-                    <p>Probabilities:</p><ul><li>DOWN: ${(data.probabilities[0]*100).toFixed(1)}%</li><li>SIDEWAYS: ${(data.probabilities[1]*100).toFixed(1)}%</li><li>UP: ${(data.probabilities[2]*100).toFixed(1)}%</li></ul><hr>`;
-                    plotDiv.innerHTML=`<img src="/plot?t=${new Date().getTime()}" alt="Initial Plot">`;
-                }catch(e){predDiv.innerHTML=`<span style="color:red">Network Error: ${e}</span>`}
-            }
-            
-            async function runBacktest(){
-                const backtestDiv=document.getElementById('backtest-results'),plotDiv=document.getElementById('plot-container'),startDate=document.getElementById('start-date').value,endDate=document.getElementById('end-date').value;
-                backtestDiv.innerHTML="Running backtest...";
-                try{
-                    const response=await fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_date:startDate,end_date:endDate})});
-                    const data=await response.json();
-                    if(data.error){backtestDiv.innerHTML=`<span style="color:red">Error: ${data.error}</span>`;return}
-                    
-                    plotDiv.innerHTML = `<img src="/plot?t=${new Date().getTime()}" alt="Backtest Plot">`;
+                    const response = await fetch('/initial_load');
+                    const data = await response.json();
+                    if(data.error){
+                        predDiv.innerHTML = `<div class="error"><i data-lucide="alert-triangle"></i> ${data.error}</div>`;
+                        refreshIcons();
+                        return;
+                    }
 
-                    backtestDiv.innerHTML=`<h4>Backtest Result</h4>
-                    <p>Total Return: <strong>${data.backtest_return.toFixed(2)}%</strong> | Trades: ${data.backtest_trades}</p>
-                    <div style="max-height:300px;overflow-y:auto;margin-top:10px;border:1px solid #eee"><table style="width:100%;border-collapse:collapse;font-size:12px">
-                    <thead><tr><th>Entry</th><th>Exit</th><th>Price In</th><th>Price Out</th><th>Dir</th><th>Return %</th></tr></thead>
-                    <tbody>${data.trades.map(t=>`<tr><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price.toFixed(2)}</td><td>${t.exit_price.toFixed(2)}</td><td style="color:${t.direction==='LONG'?'green':'red'}">${t.direction}</td><td style="color:${t.return_pct>=0?'green':'red'}">${t.return_pct.toFixed(2)}%</td></tr>`).join('')}</tbody>
-                    </table></div>`;
-                }catch(e){backtestDiv.innerHTML=`<span style="color:red">Network Error: ${e}</span>`}
+                    const p = Number(data.prediction);
+                    const probs = data.probabilities.map(x => Number(x) * 100);
+                    predDiv.innerHTML = `
+                        <div class="signal-pill ${tones[p] || 'signal-flat'}"><i data-lucide="${icons[p] || 'activity'}"></i>${labels[p]}</div>
+                        <p style="margin:10px 0 0;color:var(--muted);font-family:'IBM Plex Mono',monospace;">${data.timestamp}</p>
+                        <div class="metrics">
+                            ${probabilityMetric('DOWN', probs[0], 'var(--down)')}
+                            ${probabilityMetric('SIDEWAYS', probs[1], 'var(--flat)')}
+                            ${probabilityMetric('UP', probs[2], 'var(--up)')}
+                        </div>
+                    `;
+                    renderPlot('Initial');
+                }catch(e){
+                    predDiv.innerHTML = `<div class="error"><i data-lucide="wifi-off"></i> Network error: ${e}</div>`;
+                }
+                refreshIcons();
             }
+
+            async function runBacktest(){
+                const backtestDiv = document.getElementById('backtest-results');
+                const startDate = document.getElementById('start-date').value;
+                const endDate = document.getElementById('end-date').value;
+                backtestDiv.innerHTML = `<p class="loading"><i data-lucide="loader-circle"></i> Running backtest...</p>`;
+                refreshIcons();
+
+                try{
+                    const response = await fetch('/backtest', {
+                        method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({start_date:startDate,end_date:endDate})
+                    });
+                    const data = await response.json();
+                    if(data.error){
+                        backtestDiv.innerHTML = `<div class="error"><i data-lucide="alert-triangle"></i> ${data.error}</div>`;
+                        refreshIcons();
+                        return;
+                    }
+
+                    renderPlot('Backtest');
+                    const result = Number(data.backtest_return);
+                    const cls = result > 0 ? 'up' : (result < 0 ? 'down' : 'flat');
+
+                    backtestDiv.innerHTML = `
+                        <div class="bt-head">
+                            <div>
+                                <div class="bt-main ${cls}">${result.toFixed(2)}%</div>
+                                <div class="bt-sub">Total return</div>
+                            </div>
+                            <div class="signal-pill signal-flat"><i data-lucide="bar-chart-3"></i>${data.backtest_trades} trades</div>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Entry</th><th>Exit</th><th>Price In</th><th>Price Out</th><th>Dir</th><th>Return</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.trades.map(t => `
+                                        <tr>
+                                            <td>${t.entry_time}</td>
+                                            <td>${t.exit_time}</td>
+                                            <td>${Number(t.entry_price).toFixed(2)}</td>
+                                            <td>${Number(t.exit_price).toFixed(2)}</td>
+                                            <td class="${t.direction === 'LONG' ? 'dir-long' : 'dir-short'}">${t.direction}</td>
+                                            <td class="${Number(t.return_pct) >= 0 ? 'ret-pos' : 'ret-neg'}">${Number(t.return_pct).toFixed(2)}%</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                }catch(e){
+                    backtestDiv.innerHTML = `<div class="error"><i data-lucide="wifi-off"></i> Network error: ${e}</div>`;
+                }
+                refreshIcons();
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                refreshIcons();
+                setDefaultRange();
+                loadInitialData();
+            });
         </script>
-    </body></html>
+    </body>
+    </html>
     """
 
 @app.get("/plot")

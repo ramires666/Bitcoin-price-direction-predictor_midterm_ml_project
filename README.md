@@ -2,6 +2,10 @@
 
 Production-ready FastAPI service for BTC direction classification (`UP`, `DOWN`, `SIDEWAYS`) with backtesting UI.
 
+
+## LIVE DEMO:
+https://btc-prediction.grom.world/
+
 ## Tech Stack
 - Python 3.12
 - FastAPI + Uvicorn

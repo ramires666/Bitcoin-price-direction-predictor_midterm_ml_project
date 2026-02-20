@@ -13,6 +13,7 @@ $ContextDir = Join-Path $DeployDir ".tmp_prod_context"
 $ArchiveName = "$ImageName-$Tag.tar"
 $ArchivePath = Join-Path $DeployDir $ArchiveName
 $ImageRef = "${ImageName}:${Tag}"
+$LatestRef = "${ImageName}:latest"
 
 try {
     Write-Host "[1/6] Preparing build context..."
@@ -46,12 +47,20 @@ try {
 
     Write-Host "[2/6] Building Docker image: $ImageRef"
     docker build --pull -t $ImageRef $ContextDir
+    if ($Tag -ne "latest") {
+        Write-Host "[2.1/6] Tagging image as latest: $LatestRef"
+        docker tag $ImageRef $LatestRef
+    }
 
     Write-Host "[3/6] Saving image archive: $ArchivePath"
     if (Test-Path $ArchivePath) {
         Remove-Item $ArchivePath -Force
     }
-    docker save -o $ArchivePath $ImageRef
+    if ($Tag -eq "latest") {
+        docker save -o $ArchivePath $ImageRef
+    } else {
+        docker save -o $ArchivePath $ImageRef $LatestRef
+    }
 
     Write-Host "[4/6] Creating remote directory: ${HostAlias}:$RemoteDir"
     ssh $HostAlias "mkdir -p $RemoteDir"

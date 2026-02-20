@@ -1,11 +1,14 @@
-version: '3.8'
-
-services:
+﻿services:
   web:
-    build: .
+    container_name: xgb-bitcoin-direction-local
+    build:
+      context: .
+      dockerfile: deploy/prod_server/Dockerfile
+    image: xgb-bitcoin-direction:local
     ports:
-      - "8080:8080"
+      - "9743:9743"
     volumes:
-      - ./models:/app/models
+      - ./models:/app/models:ro
       - ./data/crypto_data.db:/app/crypto_data.db
-    restart: always
+      - ./static:/app/static
+    restart: unless-stopped

@@ -27,9 +27,17 @@ With a custom host/remote directory:
 
 ```bash
 cd /home/user/GROM/bitcoin_direction
-docker load -i xgb-bitcoin-direction-latest.tar
+docker load -i xgb-bitcoin-direction-<tag>.tar
 # start container:
 docker run -d --name xgb-bitcoin-direction -p 9743:9743 xgb-bitcoin-direction:latest
 ```
 
-If you use a different tag, the archive name will be `xgb-bitcoin-direction-<tag>.tar`.
+The build script now stores both tags inside the archive:
+- `xgb-bitcoin-direction:<tag>`
+- `xgb-bitcoin-direction:latest`
+
+You can also run the exact tag directly:
+
+```bash
+docker run -d --name xgb-bitcoin-direction -p 9743:9743 xgb-bitcoin-direction:<tag>
+```
